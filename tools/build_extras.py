@@ -37,14 +37,21 @@ from build_pack import (ATTRIBUTION_TEXT, CREDIT, INDEX_BYTES, LICENSE_TEXT, MAX
 from build_places import label_name
 
 FUEL, MARINA, RAMP, ROAD_FUEL = 1, 2, 3, 4
-CLASS_NAMES = {FUEL: "fuel", MARINA: "marina", RAMP: "boat_ramp", ROAD_FUEL: "road_fuel"}
+# THES-83 (approved by the Coordinator 2026-10-21; the owner: "I was expecting major landmarks"): landmarks as
+# classes of the same symbols layer, written only with --landmarks. A display that does not know a class passes over
+# it (pwca_panoptes map_symbols.h), so a pack with them is safe on every display that reads symbols.
+LIGHTHOUSE, DAM, LOCK, SWIM_BEACH = 5, 6, 7, 8
+LANDMARKS = {LIGHTHOUSE, DAM, LOCK, SWIM_BEACH}
+CLASS_NAMES = {FUEL: "fuel", MARINA: "marina", RAMP: "boat_ramp", ROAD_FUEL: "road_fuel",
+               LIGHTHOUSE: "lighthouse", DAM: "dam", LOCK: "lock", SWIM_BEACH: "swim_beach"}
 # tile_zoom, zoom_min, zoom_max, coord_bits, classes: the names file's levels from zoom 10. Fuel and marina from zoom
-# 10, the boat ramp from 12 (Branding's style, pwca_logos d536870); a road's filling station from 12.
+# 10, the boat ramp from 12 (Branding's style, pwca_logos d536870); a road's filling station from 12. Landmarks:
+# lighthouse and dam from 10 (seen from afar), lock and swimming beach from 12.
 SYMBOL_LEVELS = [
-    (10, 10, 11, 12, {FUEL, MARINA}),
-    (12, 12, 13, 12, {FUEL, MARINA, RAMP, ROAD_FUEL}),
-    (12, 14, 14, 16, {FUEL, MARINA, RAMP, ROAD_FUEL}),
-    (14, 15, 16, 14, {FUEL, MARINA, RAMP, ROAD_FUEL}),
+    (10, 10, 11, 12, {FUEL, MARINA, LIGHTHOUSE, DAM}),
+    (12, 12, 13, 12, {FUEL, MARINA, RAMP, ROAD_FUEL} | LANDMARKS),
+    (12, 14, 14, 16, {FUEL, MARINA, RAMP, ROAD_FUEL} | LANDMARKS),
+    (14, 15, 16, 14, {FUEL, MARINA, RAMP, ROAD_FUEL} | LANDMARKS),
 ]
 SYMBOL_NAME_ZOOM = 14  # a symbol's name is written in the levels that serve this zoom and closer (drawn from 14)
 SYMBOL_MERGE_M = 60.0  # two symbols of one class nearer than this are one (a marina mapped as a point and an area)
@@ -60,15 +67,33 @@ RUNS_PER_NAME = 3  # the longest runs of one name and class kept in a tile
 REGION_ZOOM = 7  # a file over --max-file-bytes is split between regions of zoom-7 tiles, as build_pack.py does
 
 # Tagged points worth decoding: (key, value) pairs, and keys with any value.
-SCAN_PAIRS = {"leisure": ("marina", "slipway"), "waterway": ("fuel",), "amenity": ("fuel",)}
-SCAN_KEYS = ("seamark:type",)
+SCAN_PAIRS = {"leisure": ("marina", "slipway", "swimming_area", "beach_resort"),
+              "waterway": ("fuel", "dam", "lock_gate"), "amenity": ("fuel",), "man_made": ("lighthouse",),
+              "natural": ("beach",)}
+SCAN_KEYS = ("seamark:type", "lock")
 
 
-def symbol_classes(tags, road_fuel=False):
+def landmark_classes(tags):
+    """The landmark classes of an OSM object's tags (THES-83)."""
+    out = set()
+    if tags.get("man_made") == "lighthouse" or tags.get("seamark:type") in ("light_major", "landmark") and \
+            "tower" in (tags.get("seamark:landmark:category") or ""):
+        out.add(LIGHTHOUSE)
+    if tags.get("waterway") == "dam":
+        out.add(DAM)
+    if tags.get("waterway") == "lock_gate" or tags.get("lock") == "yes":
+        out.add(LOCK)
+    leisure = tags.get("leisure")
+    if leisure in ("swimming_area", "beach_resort") or (tags.get("natural") == "beach" and tags.get("name")):
+        out.add(SWIM_BEACH)  # a beach is a landmark only when it has a name (a sand bar is not)
+    return out
+
+
+def symbol_classes(tags, road_fuel=False, landmarks=False):
     """The symbol classes of an OSM object's tags, ascending; () for none. A private place is left out."""
     if tags.get("access") in ("private", "no"):
         return ()
-    out = set()
+    out = landmark_classes(tags) if landmarks else set()
     cats = set((tags.get("seamark:small_craft_facility:category") or "").replace(" ", "").split(";"))
     leisure = tags.get("leisure")
     if leisure == "marina" or tags.get("seamark:harbour:category") == "marina":
@@ -97,7 +122,7 @@ def symbol_name(tags):
     return b""
 
 
-def _symbol_nodes_in(block, road_fuel):
+def _symbol_nodes_in(block, road_fuel, landmarks=False):
     """Dense nodes that are symbols: [(node id, lat_e7, lon_e7, classes, name bytes)]. Only nodes with one of the
     SCAN tags are decoded in Python (as osmpbf._tagged_nodes_in does for one key)."""
     strings, groups, gran, lat_off, lon_off = block
@@ -142,7 +167,7 @@ def _symbol_nodes_in(block, road_fuel):
                     e += 1
                 p = kv[s:e]
                 tags = {strings[int(p[i])]: strings[int(p[i + 1])] for i in range(0, len(p) - 1, 2)}
-                classes = symbol_classes(tags, road_fuel)
+                classes = symbol_classes(tags, road_fuel, landmarks)
                 if classes:
                     out.append((int(ids[n]), int(osmpbf._e7(np.int64(lat_off + gran * la[n]))),
                                 int(osmpbf._e7(np.int64(lon_off + gran * lo[n]))), classes, symbol_name(tags)))
@@ -162,7 +187,8 @@ def extras_way(tags):
         return ("r", c, name) if name else None
     if only == "streets":
         return None
-    classes = symbol_classes(tags, os.environ.get("PWCA_EXTRAS_ROAD_FUEL") == "1")
+    classes = symbol_classes(tags, os.environ.get("PWCA_EXTRAS_ROAD_FUEL") == "1",
+                             os.environ.get("PWCA_EXTRAS_LANDMARKS") == "1")
     return ("s", classes, symbol_name(tags)) if classes else None
 
 
@@ -381,6 +407,8 @@ def main(argv):
     ap.add_argument("--only", choices=("symbols", "streets"), default=None, help="build one of the two files")
     ap.add_argument("--road-fuel", action="store_true",
                     help="also write the filling stations on roads, as symbol class 4 (no display draws it yet)")
+    ap.add_argument("--landmarks", action="store_true",
+                    help="also write the landmarks (lighthouse 5, dam 6, lock 7, swimming beach 8; THES-83)")
     ap.add_argument("--processes", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     ap.add_argument("--max-file-bytes", type=int, default=MAX_FILE_BYTES)
     ap.add_argument("--high-priority", action="store_true", help="run at high priority (every worker process too)")
@@ -390,6 +418,7 @@ def main(argv):
         osmpbf.apply_priority()
     os.environ["PWCA_EXTRAS_ONLY"] = a.only or ""
     os.environ["PWCA_EXTRAS_ROAD_FUEL"] = "1" if a.road_fuel else "0"
+    os.environ["PWCA_EXTRAS_LANDMARKS"] = "1" if a.landmarks else "0"
     do_symbols, do_streets = a.only != "streets", a.only != "symbols"
     src, out = Path(a.extract), Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -420,7 +449,7 @@ def main(argv):
     points = []  # (class, lat_e7, lon_e7, name, uid); uid = 2 * node id, or 2 * way id + 1
     if do_symbols:
         passing("points")
-        for nid, la, lo, classes, nm in osmpbf.map_blocks(src, _symbol_nodes_in, (a.road_fuel,), a.processes):
+        for nid, la, lo, classes, nm in osmpbf.map_blocks(src, _symbol_nodes_in, (a.road_fuel, a.landmarks), a.processes):
             points.extend((c, la, lo, nm, 2 * nid) for c in classes)
         log(f"symbols mapped as points: {len(points)}")
     progress("points", 1.0)
@@ -548,7 +577,7 @@ def main(argv):
                 "symbols": len(points), "symbols_by_class": by_name,
                 "symbols_with_a_name": sum(1 for p in points if p[3]),
                 "merged_with_a_near_one": merged, "over_a_tiles_budget_left_out": dropped,
-                "road_fuel_written": bool(a.road_fuel)}
+                "road_fuel_written": bool(a.road_fuel), "landmarks_written": bool(a.landmarks)}
     progress("tiles", 0.9)
 
     (out / "LICENSE.txt").write_text(LICENSE_TEXT, encoding="utf-8", newline="\n")

@@ -25,6 +25,34 @@ def fix_header_crc(data):
     return bytes(data)
 
 
+class Landmarks(unittest.TestCase):
+    """THES-83: landmarks are symbol classes 5 to 8, written only with --landmarks."""
+
+    def test_classes(self):
+        on = dict(landmarks=True)
+        self.assertEqual(bx.symbol_classes({"man_made": "lighthouse"}, **on), (bx.LIGHTHOUSE,))
+        self.assertEqual(bx.symbol_classes({"seamark:type": "landmark", "seamark:landmark:category": "tower"}, **on),
+                         (bx.LIGHTHOUSE,))
+        self.assertEqual(bx.symbol_classes({"waterway": "dam"}, **on), (bx.DAM,))
+        self.assertEqual(bx.symbol_classes({"waterway": "lock_gate"}, **on), (bx.LOCK,))
+        self.assertEqual(bx.symbol_classes({"waterway": "canal", "lock": "yes"}, **on), (bx.LOCK,))
+        self.assertEqual(bx.symbol_classes({"leisure": "swimming_area"}, **on), (bx.SWIM_BEACH,))
+        self.assertEqual(bx.symbol_classes({"natural": "beach", "name": "Lake Beach"}, **on), (bx.SWIM_BEACH,))
+        self.assertEqual(bx.symbol_classes({"natural": "beach"}, **on), (), "an unnamed beach is not a landmark")
+        self.assertEqual(bx.symbol_classes({"man_made": "lighthouse", "access": "private"}, **on), ())
+        self.assertEqual(bx.symbol_classes({"leisure": "marina"}, **on), (bx.MARINA,), "the four of today unchanged")
+
+    def test_off_by_default(self):
+        for tags in ({"man_made": "lighthouse"}, {"waterway": "dam"}, {"lock": "yes"}, {"leisure": "swimming_area"}):
+            self.assertEqual(bx.symbol_classes(tags), (), tags)
+
+    def test_levels(self):
+        z10 = bx.SYMBOL_LEVELS[0][4]
+        self.assertTrue({bx.LIGHTHOUSE, bx.DAM} <= z10 and not {bx.LOCK, bx.SWIM_BEACH} & z10)
+        for lv in bx.SYMBOL_LEVELS[1:]:
+            self.assertTrue(bx.LANDMARKS <= lv[4])
+
+
 class Format(unittest.TestCase):
     def test_symbol_tile(self):
         feats = [(POINT, 1, None, (5, 6, b"Dock")), (POINT, 3, None, (0, 4096, b"")), (POINT, 500, None, (7, 7, b"x"))]
