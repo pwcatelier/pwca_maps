@@ -404,14 +404,64 @@ def _near_nodes_in(block, tiles_path):
 
 
 def _buildings_in(block, bits_path):
-    """Worker: a block's buildings whose first point is a water-side node (the bit set of bits_path)."""
+    """Worker: a block's buildings whose first point is a water-side node (the bit set of bits_path), as one compact
+    pair [(node counts, their node ids end to end)] (no tuple per building: North America has tens of millions)."""
     bits = np.load(bits_path, mmap_mode="r")
-    out = []
-    for wid, kind, refs in osmpbf._ways_in(block, building_kind, None):
+    lens, refs_all = [], []
+    for _wid, _kind, refs in osmpbf._ways_in(block, building_kind, None):
         r0 = int(refs[0])
         if 0 <= r0 < (1 << NODE_ID_BITS) and (int(bits[r0 >> 3]) >> (r0 & 7)) & 1:
-            out.append((wid, kind, refs))
-    return out
+            lens.append(refs.size)
+            refs_all.append(refs.astype(np.int64))
+    if not lens:
+        return []
+    return [(np.array(lens, np.int32), np.concatenate(refs_all))]
+
+
+def collect_buildings(path, store_dir, log, processes, t0, passing, progress):
+    """collect_store for the buildings by the water: the water side, the buildings that start on it, their points,
+    then each closed building of MIN_AREA_BUILDING_M2 or more into the polygon store as class BUILDING."""
+    near_dir = Path(store_dir).parent / "near.tmp"
+    bits_path = water_side_nodes(path, near_dir, processes, log, t0)
+    passing("ways")
+    parts = osmpbf.map_blocks(path, _buildings_in, (bits_path,), processes)
+    shutil.rmtree(near_dir, ignore_errors=True)
+    lens = np.concatenate([p[0] for p in parts]).astype(np.int64) if parts else np.zeros(0, np.int64)
+    flat = np.concatenate([p[1] for p in parts]) if parts else np.zeros(0, np.int64)
+    del parts
+    log(f"buildings by the water: {lens.size}, {flat.size} node references ({time.time() - t0:.0f} s)")
+    needed = np.unique(flat)
+    passing("nodes")
+    lat, lon, cells = osmpbf.nodes_e7_parallel(path, needed, processes, cell_zoom=8)
+    osmpbf.PROGRESS = None
+    progress("store", 0.0)
+    missing = np.iinfo(np.int32).min
+    deg = featurestore.degrees
+    polys = featurestore.StoreWriter(Path(store_dir) / "poly")
+    lines = featurestore.StoreWriter(Path(store_dir) / "line")
+    stats = {"sea": 0, "small": 0, "unclosed": 0, "orphan_holes": 0}
+    ends = np.cumsum(lens)
+    for a, b in zip((ends - lens).tolist(), ends.tolist()):
+        refs = flat[a:b]
+        if b - a < 4 or refs[0] != refs[-1]:
+            stats["unclosed"] += 1
+            continue
+        idx = np.searchsorted(needed, refs[:-1])
+        la, lo = lat[idx], lon[idx]
+        ok = la != missing
+        la, lo = la[ok], lo[ok]
+        if la.size < 3:
+            continue
+        if area_m2(deg(la), deg(lo)) < MIN_AREA_BUILDING_M2:
+            stats["small"] += 1
+            continue
+        polys.add(BUILDING, [(la, lo, True)])
+    n_poly, n_points = len(polys), polys.points
+    polys.close()
+    lines.close()
+    log(f"features: {n_poly} buildings; dropped {stats['small']} under {MIN_AREA_BUILDING_M2:.0f} m2, "
+        f"{stats['unclosed']} unclosed ways; {n_points} points in the store ({time.time() - t0:.0f} s)")
+    return cells, stats
 
 
 def mark_nodes(bits, ids):
@@ -671,6 +721,8 @@ def collect_store(path, store_dir, log, processes, sea=None, layer="water", prog
     def put_name(typ, cls, size, lat_deg, lon_deg, name):
         names.write(f"{typ}\t{cls}\t{size:.0f}\t{int(round(lat_deg * 1e7))}\t{int(round(lon_deg * 1e7))}\t{name}\n")
 
+    if is_buildings(layer):
+        return collect_buildings(path, store_dir, log, processes, t0, passing, progress)
     if layer == "roads":
         rels, member_ids, sea = [], np.zeros(0, np.int64), None
         passing("ways")
@@ -698,15 +750,6 @@ def collect_store(path, store_dir, log, processes, sea=None, layer="water", prog
             f"({time.time() - t0:.0f} s)")
         passing("ways")
         ws = osmpbf.ways_parallel(path, land_kind, member_ids, processes)
-    elif is_buildings(layer):
-        sea = None
-        rels, member_ids = [], np.zeros(0, np.int64)
-        near_dir = Path(store_dir).parent / "near.tmp"
-        bits_path = water_side_nodes(path, near_dir, processes, log, t0)
-        passing("ways")
-        ws = osmpbf.map_blocks(path, _buildings_in, (bits_path,), processes)
-        shutil.rmtree(near_dir, ignore_errors=True)
-        log(f"buildings by the water: {len(ws)} ({time.time() - t0:.0f} s)")
     elif full:
         rels = osmpbf.relations_parallel(path, water_relation_full, processes)
         member_ids = np.unique(np.array([m for _, _, ms in rels for typ, m, _ in ms if typ == 1], np.int64))
@@ -755,8 +798,7 @@ def collect_store(path, store_dir, log, processes, sea=None, layer="water", prog
             stats["sea"] += 1
         log(f"sea: {stats['sea']} water polygons from {Path(sea).name} ({time.time() - t0:.0f} s)")
     deg = featurestore.degrees
-    min_area = MIN_AREA_LAND_M2 if is_land(layer) else MIN_AREA_BUILDING_M2 if is_buildings(layer) \
-        else MIN_AREA_FULL_M2 if full else MIN_AREA_M2
+    min_area = MIN_AREA_LAND_M2 if is_land(layer) else MIN_AREA_FULL_M2 if full else MIN_AREA_M2
     classify = land_class if is_land(layer) else area_class
     if is_lines(layer):
         # Each class's ways joined end to end where two of them meet, then stored as lines (join_lines). The full
@@ -856,8 +898,7 @@ def collect_store(path, store_dir, log, processes, sea=None, layer="water", prog
     lines.close()
     if names:
         names.close()
-    what = "land-cover areas" if is_land(layer) else "buildings" if is_buildings(layer) \
-        else "water areas (with the sea pieces)"
+    what = "land-cover areas" if is_land(layer) else "water areas (with the sea pieces)"
     log(f"features: {n_poly} {what}, {n_line} river/canal lines; dropped {stats['small']} "
         f"under {min_area:.0f} m2, {stats['unclosed']} unclosed ways, {stats['orphan_holes']} holes outside their outers; "
         f"{n_points} points in the store ({time.time() - t0:.0f} s)")
