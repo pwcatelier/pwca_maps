@@ -8,8 +8,10 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File C:\git\pwca_maps\out\_wt-thes83\tools\add_land_cover.ps1
 #
 # Three steps, each with a marker file when it has finished (<Work>\<step>.done):
-#   build     one run over the OpenStreetMap extract: <Work>\pack\<Name>-land.pmt (tools/build_pack.py --layer land)
-#   check     decodes every tile of it (tools/pmt.py check)
+#   build     one run over the OpenStreetMap extract: <Work>\pack\<Name>-land-01.pmt, -02 ... (tools/build_pack.py
+#             --layer land; a layer is cut into files under 2 GiB, as the base pack's north-america-01..03.pmt are)
+#   check     decodes every tile of every .pmt of it, one file after the other (tools/pmt.py check); the first that
+#             fails stops the step
 #   assemble  a NEW, complete card folder <Card>\PANOPTES: today's files copied unchanged (each checked against its
 #             sha256), the land cover beside them, one MANIFEST.sha256, CURRENT naming the pack <PackId>
 # The same command run again carries on at the first step without a marker; a step that was stopped starts again from
@@ -75,9 +77,9 @@ function Say([string]$text) {
     Write-Host $line
     Add-Content -Path $runLog -Value $line -Encoding utf8
 }
-function Run-Step([string]$step, [string[]]$stepArgs) {
+function Run-Step([string]$step, [string[]]$stepArgs, [switch]$Append) {
     $log = Join-Path $Work "$step.log"
-    if (Test-Path $log) { Remove-Item $log }
+    if ((Test-Path $log) -and -not $Append) { Remove-Item $log }
     & python -u @stepArgs 2>&1 | ForEach-Object {
         $line = "$_"
         Add-Content -Path $log -Value $line -Encoding utf8
@@ -111,12 +113,23 @@ foreach ($step in $steps) {
         $code = Run-Step $step $a
         if ($code -eq 0) { Rename-Item $packPartial "pack" }
     } elseif ($step -eq "check") {
-        $land = Get-ChildItem $pack -Filter "*.pmt" -File
-        if ($land.Count -ne 1) {
-            Say "check: expected exactly one .pmt in $pack, found $($land.Count)"
+        # Every file of the layer (2026-10-21: the North America land cover came out as two parts, -01 and -02, and a
+        # check that wanted exactly one file stopped the run). At least one; the first that fails stops the step.
+        $land = @(Get-ChildItem $pack -Filter "*.pmt" -File | Sort-Object Name)
+        if ($land.Count -lt 1) {
+            Say "check: no .pmt in $pack"
             $code = 4
         } else {
-            $code = Run-Step $step @((Join-Path $snap "tools\pmt.py"), "check", $land[0].FullName)
+            $log = Join-Path $Work "check.log"
+            if (Test-Path $log) { Remove-Item $log }
+            foreach ($f in $land) {
+                Say ("check: {0} ({1:N0} bytes), file {2} of {3}" -f $f.Name, $f.Length, ([array]::IndexOf($land, $f) + 1), $land.Count)
+                $code = Run-Step $step @((Join-Path $snap "tools\pmt.py"), "check", $f.FullName) -Append
+                if ($code -ne 0) {
+                    Say "check: $($f.Name) failed"
+                    break
+                }
+            }
         }
     } else {
         if (Test-Path $Card) {
