@@ -14,8 +14,8 @@ The owner, 2026-10-06 (Jira THES-118): "rider symbols such as boat ramps, marina
   `version_minor` 3 or higher; a reader refuses kind 7 or 8 in a file that states less.
 - Nothing else. A base, water, zones, roads or places file is written exactly as before (1.0 or 1.1, byte for
   byte), and a pack gains the new files beside its old ones. No built file is rebuilt.
-- **Layer kind 6 and minor version 2 are not defined here.** They are held for the land cover work (branch
-  `panoptes/format-1.1` of this repository, not merged). A reader of this version treats kind 6 as unknown.
+- **Layer kind 6 (minor version 2) is the land cover, FORMAT.md section 7.7** (merged from `panoptes/format-1.1` on
+  2026-10-21, THES-83). A reader that does not draw land cover treats kind 6 as unknown and skips its file.
 - **A reader that does not know a kind never opens it.** The display firmware 0.4.0 to 0.4.4 reads the 64-byte
   fixed header, sees a kind outside water, roads and places, logs one line and skips the file: no memory, no file
   slot, nothing on the glass (`components/panoptes_map_store/map_store.c` of pwca_panoptes at 9f84717). Each

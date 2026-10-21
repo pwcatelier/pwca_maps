@@ -1,5 +1,6 @@
-"""Map tile files (PMT) version 1.3: the reference encoder, decoder and canonical dump. The format is FORMAT.md and, for
-the layer kinds 7 and 8 of version 1.3, FORMAT-1.3-SYMBOLS-STREET-NAMES.md.
+"""Map tile files (PMT) version 1.3: the reference encoder, decoder and canonical dump. The format is FORMAT.md
+(with section 7.7, the land cover of version 1.2) and, for the layer kinds 7 and 8 of version 1.3,
+FORMAT-1.3-SYMBOLS-STREET-NAMES.md.
 
 Usage:
   python tools/pmt.py dump FILE      print the canonical dump (FORMAT.md section 9)
@@ -37,12 +38,14 @@ GRID_BYTES = GRID_SIDE * GRID_SIDE // 4
 POLYGON, LINE, POINT = 1, 2, 3
 KIND_BASE, KIND_WATER, KIND_ZONES = 1, 2, 3
 KIND_ROADS, KIND_PLACES = 4, 5  # FORMAT 1.1 (sections 7.4 and 7.5)
+KIND_LAND = 6  # FORMAT 1.2 (section 7.7): land cover
 # The geometries a layer kind may hold (FORMAT.md section 6). A kind that is not here is not decoded at all.
 # FORMAT 1.3 (FORMAT-1.3-SYMBOLS-STREET-NAMES.md): symbols (points with a class and an optional name) and street names
-# (lines that carry their name). Kind 6 and minor version 2 are held for the land cover work and are not defined here.
+# (lines that carry their name). Kind 6 (minor version 2) is the land cover, FORMAT.md section 7.7.
 KIND_SYMBOLS, KIND_STREETS = 7, 8
 KIND_GEOMETRIES = {KIND_BASE: (POLYGON, LINE), KIND_WATER: (POLYGON, LINE), KIND_ZONES: (POLYGON, LINE),
-                   KIND_ROADS: (LINE,), KIND_PLACES: (POINT,), KIND_SYMBOLS: (POINT,), KIND_STREETS: (LINE,)}
+                   KIND_ROADS: (LINE,), KIND_PLACES: (POINT,), KIND_LAND: (POLYGON,), KIND_SYMBOLS: (POINT,),
+                   KIND_STREETS: (LINE,)}
 NAME_MAX = 127  # bytes of a name (a point's, a named line's)
 LEVEL_FLAG_GRID = 1
 ID_FIELDS = ("layer", "credit", "license", "source", "source_date", "build")
@@ -56,10 +59,12 @@ class PmtError(ValueError):
 
 
 def kind_minor(layer_kind):
-    """The minor version a file of this layer kind states: 1 for the kinds 1.1 added, 3 for the kinds 1.3 added,
-    else 0."""
+    """The minor version a file of this layer kind states: 1 for the kinds 1.1 added, 2 for the land cover (1.2),
+    3 for the kinds 1.3 added, else 0."""
     if layer_kind in (KIND_SYMBOLS, KIND_STREETS):
         return 3
+    if layer_kind == KIND_LAND:
+        return 2
     return 1 if layer_kind in (KIND_ROADS, KIND_PLACES) else 0
 
 
