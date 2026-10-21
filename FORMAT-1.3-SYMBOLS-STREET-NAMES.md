@@ -63,7 +63,11 @@ it does for a road class it does not know. Class 0 is never written.
 | 2 | Marina | `leisure=marina`; `seamark:harbour:category=marina` |
 | 3 | Boat ramp | `leisure=slipway`; `seamark:small_craft_facility:category` holding `slipway` |
 | 4 | Filling station on a road | `amenity=fuel` that is not class 1. Written only when the builder is told to (`--road-fuel`); no style exists for it yet, so no display draws it |
-| 5 to 15 | Held for further services at the water | |
+| 5 | Lighthouse (landmark) | `man_made=lighthouse`; a `seamark:type` of `light_major` or `landmark` whose `seamark:landmark:category` holds `tower`. Written only with `--landmarks`, as classes 6 to 8 |
+| 6 | Dam (landmark) | `waterway=dam` |
+| 7 | Lock (landmark) | `waterway=lock_gate`; `lock=yes` |
+| 8 | Swimming beach (landmark) | `leisure=swimming_area` or `beach_resort`; `natural=beach` with a name (a nameless sand bar is not one) |
+| 9 to 15 | Held for further services at the water | |
 | 16 and up | Free for further points of interest | |
 
 A class added later is given a row here; the version stays 1.3.
@@ -84,13 +88,14 @@ The names file's levels from zoom 10 (`FORMAT.md` 7.6), so a display reads symbo
 
 | Level | Tile zoom | Serves | Bits | Classes | Names |
 |---|---|---|---|---|---|
-| L0 | 10 | 10 to 11 | 12 | 1, 2 | none (`name_len` 0) |
-| L1 | 12 | 12 to 13 | 12 | 1 to 4 | none |
-| L2 | 12 | 14 | 16 | 1 to 4 | written |
-| L3 | 14 | 15 to 16 | 14 | 1 to 4 | written |
+| L0 | 10 | 10 to 11 | 12 | 1, 2, 5 | none (`name_len` 0) |
+| L1 | 12 | 12 to 13 | 12 | 1 to 8 | none |
+| L2 | 12 | 14 | 16 | 1 to 8 | written |
+| L3 | 14 | 15 to 16 | 14 | 1 to 8 | written |
 
 - Branding's style (pwca_logos d536870, `ux/PANOPTES_MAP_NEW_LAYERS_STYLE.md` 3): fuel and marina from zoom 10, the
-  boat ramp from 12, a symbol's name from 14. The levels hold exactly that; a display need not filter by zoom, but
+  boat ramp from 12, a symbol's name from 14; the landmarks (THES-83, pwca_logos 3302c87 `ux/PANOPTES_MAP_LANDMARKS.md`):
+  the lighthouse from 10, dam, lock and swimming beach from 12. The levels hold exactly that; a display need not filter by zoom, but
   it still decides what it draws.
 - **No buffer:** a symbol is in exactly one tile of a level, so a display that gathers the tiles in view never
   meets a symbol twice. A display that draws tile by tile must let a symbol's picture cross the tile's edge.

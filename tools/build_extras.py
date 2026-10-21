@@ -46,9 +46,9 @@ CLASS_NAMES = {FUEL: "fuel", MARINA: "marina", RAMP: "boat_ramp", ROAD_FUEL: "ro
                LIGHTHOUSE: "lighthouse", DAM: "dam", LOCK: "lock", SWIM_BEACH: "swim_beach"}
 # tile_zoom, zoom_min, zoom_max, coord_bits, classes: the names file's levels from zoom 10. Fuel and marina from zoom
 # 10, the boat ramp from 12 (Branding's style, pwca_logos d536870); a road's filling station from 12. Landmarks:
-# lighthouse and dam from 10 (seen from afar), lock and swimming beach from 12.
+# the lighthouse from 10 (seen from afar), dam, lock and swimming beach from 12 (Branding, pwca_logos 3302c87).
 SYMBOL_LEVELS = [
-    (10, 10, 11, 12, {FUEL, MARINA, LIGHTHOUSE, DAM}),
+    (10, 10, 11, 12, {FUEL, MARINA, LIGHTHOUSE}),
     (12, 12, 13, 12, {FUEL, MARINA, RAMP, ROAD_FUEL} | LANDMARKS),
     (12, 14, 14, 16, {FUEL, MARINA, RAMP, ROAD_FUEL} | LANDMARKS),
     (14, 15, 16, 14, {FUEL, MARINA, RAMP, ROAD_FUEL} | LANDMARKS),

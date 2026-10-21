@@ -315,6 +315,29 @@ def land_cover():
                 build_time=BUILD_TIME, data_time=DATA_TIME)
 
 
+BUILDING_STRINGS = ["osm-buildings", "© OpenStreetMap contributors", "ODbL 1.0", "OpenStreetMap", "2026-09-20",
+                    "test-vectors"]
+
+
+def buildings():
+    """A buildings file (FORMAT-1.4-BUILDINGS.md: PMT 1.4, layer kind 9, polygons only, class 1), one level cut at
+    zoom 14 serving 15 and 16 with 14-bit coordinates: a house, an L-shaped building, a courtyard building (an outer
+    ring and a hole), one that runs on into the buffer of the tile, and one of a class no display knows (2: not
+    drawn). The tile east of it is empty (absent): a display draws nothing there."""
+    house = [[(1000, 1000), (1400, 1000), (1400, 1300), (1000, 1300)]]
+    ell = [[(3000, 3000), (4000, 3000), (4000, 3400), (3400, 3400), (3400, 4200), (3000, 4200)]]
+    court = [[(8000, 8000), (10000, 8000), (10000, 10000), (8000, 10000)],
+             [(8600, 8600), (8600, 9400), (9400, 9400), (9400, 8600)]]
+    edge = [[(15800, 2000), (16420, 2000), (16420, 2600), (15800, 2600)]]
+    other = [[(12000, 12000), (12400, 12000), (12400, 12400), (12000, 12400)]]
+    level = {"tile_zoom": 14, "zoom_min": 15, "zoom_max": 16, "coord_bits": 14, "buffer": 64, "tolerance_dm": 10,
+             "grid": {(40, 90): 1},
+             "tiles": {(2600, 5800): [(POLYGON, 1, None, house), (POLYGON, 1, None, ell), (POLYGON, 1, None, court),
+                                      (POLYGON, 1, None, edge), (POLYGON, 2, None, other)]}}
+    return dict(layer_kind=pmt.KIND_BUILDINGS, levels=[level], strings=BUILDING_STRINGS, ids=IDS,
+                build_time=BUILD_TIME, data_time=DATA_TIME)
+
+
 NAME_ORDER = [6, 5, 7, 16, 1, 17, 18, 2, 24, 19, 25, 3, 20, 32, 26, 21, 4, 27, 33, 22, 28]
 
 
@@ -459,7 +482,7 @@ def street_names():
 VECTORS = {"symbols": symbols, "street_names": street_names, "water_minimal": water_minimal, "water_levels": water_levels, "zones": zones, "water_seam": water_seam,
            "base_minimal": base_minimal, "zones_shapes": zones_shapes, "roads": roads, "roads_seam": roads_seam,
            "roads_dense": roads_dense, "places": places, "places_dense": places_dense, "lines_full": lines_full, "names_full": names_full, "minor_only": minor_only, "water_lines": water_lines,
-           "land_cover": land_cover}
+           "land_cover": land_cover, "buildings": buildings}
 
 
 def main(argv):

@@ -16,7 +16,7 @@ import zlib
 
 MAGIC = b"PMTF"
 VERSION_MAJOR = 1
-VERSION_MINOR = 3  # the newest minor this tool writes and reads; a base, water or zones file is still written as 1.0
+VERSION_MINOR = 4  # the newest minor this tool writes and reads; a base, water or zones file is still written as 1.0
 FIXED_HEADER = 64
 LEVEL_RECORD = 48
 INDEX_ENTRY = 16
@@ -43,9 +43,11 @@ KIND_LAND = 6  # FORMAT 1.2 (section 7.7): land cover
 # FORMAT 1.3 (FORMAT-1.3-SYMBOLS-STREET-NAMES.md): symbols (points with a class and an optional name) and street names
 # (lines that carry their name). Kind 6 (minor version 2) is the land cover, FORMAT.md section 7.7.
 KIND_SYMBOLS, KIND_STREETS = 7, 8
+# FORMAT 1.4 (FORMAT-1.4-BUILDINGS.md, THES-83): buildings by the water, polygons only.
+KIND_BUILDINGS = 9
 KIND_GEOMETRIES = {KIND_BASE: (POLYGON, LINE), KIND_WATER: (POLYGON, LINE), KIND_ZONES: (POLYGON, LINE),
                    KIND_ROADS: (LINE,), KIND_PLACES: (POINT,), KIND_LAND: (POLYGON,), KIND_SYMBOLS: (POINT,),
-                   KIND_STREETS: (LINE,)}
+                   KIND_STREETS: (LINE,), KIND_BUILDINGS: (POLYGON,)}
 NAME_MAX = 127  # bytes of a name (a point's, a named line's)
 LEVEL_FLAG_GRID = 1
 ID_FIELDS = ("layer", "credit", "license", "source", "source_date", "build")
@@ -60,7 +62,9 @@ class PmtError(ValueError):
 
 def kind_minor(layer_kind):
     """The minor version a file of this layer kind states: 1 for the kinds 1.1 added, 2 for the land cover (1.2),
-    3 for the kinds 1.3 added, else 0."""
+    3 for the kinds 1.3 added, 4 for the buildings (1.4), else 0."""
+    if layer_kind == KIND_BUILDINGS:
+        return 4
     if layer_kind in (KIND_SYMBOLS, KIND_STREETS):
         return 3
     if layer_kind == KIND_LAND:

@@ -87,6 +87,25 @@ class Assemble(unittest.TestCase):
         with self.assertRaises(PackError):
             assemble_pack.layer_kind(self.t / "not.pmt")
 
+    def test_replace(self):
+        """THES-83: with replace, a later pack's file of the same name is taken (the landmarks' symbols file)."""
+        newer = make_pack(self.t / "w2", "region.pmt", "water_levels.pmt", fmt="PMT 1.0: rebuilt")
+        out = self.t / "pack"
+        doc = assemble_pack.assemble(out, [self.water, self.roads, newer], self.quiet, replace=True)
+        self.assertEqual((out / "region.pmt").read_bytes(), (VECTORS / "water_levels.pmt").read_bytes())
+        self.assertEqual(doc["files"]["region.pmt"]["format"], "PMT 1.0: rebuilt")
+        self.assertEqual(doc["files"]["region.pmt"]["sha256"], sha((VECTORS / "water_levels.pmt").read_bytes()))
+        self.assertEqual(sorted(doc["files"]), ["region-roads.pmt", "region.pmt"])
+        self.assertEqual(set(assemble_pack.read_manifest(out)), {"ATTRIBUTION.txt", "LICENSE.txt", "SOURCES.json",
+                                                                  "region-roads.pmt", "region.pmt"})
+        # The later-kind count is of the files taken: replacing one of 7 keeps the pack at 7.
+        fmt = "PMT 1.2 (FORMAT.md 7.7): land cover, layer_kind 6"
+        land = [make_pack(self.t / f"land{i}", f"region-land-{i:02d}.pmt", "land_cover.pmt", fmt=fmt) for i in range(7)]
+        again = make_pack(self.t / "again", "region-land-00.pmt", "land_cover.pmt", fmt=fmt)
+        out2 = self.t / "pack2"
+        doc = assemble_pack.assemble(out2, [self.water] + land + [again], self.quiet, replace=True)
+        self.assertEqual(len(doc["files"]), 8)
+
     def test_refusals(self):
         out = self.t / "pack"
         with self.assertRaises(PackError):  # the same file name in two packs

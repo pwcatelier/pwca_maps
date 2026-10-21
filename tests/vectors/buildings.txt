@@ -1,0 +1,22 @@
+PMTF 1.4 kind=9 levels=1 strings=6 attrs=0 build_time=1790208000 data_time=1790121600
+ids layer=0 credit=1 license=2 source=3 source_date=4 build=5
+string 0 "osm-buildings"
+string 1 "© OpenStreetMap contributors"
+string 2 "ODbL 1.0"
+string 3 "OpenStreetMap"
+string 4 "2026-09-20"
+string 5 "test-vectors"
+level 0 tz=14 zoom=15-16 bits=14 buffer=64 flags=1 full_class=0 keys=40668352-40668352 entries=1 tol_dm=10
+grid 0 v0=65535 v1=1 v2=0 v3=0
+tile 0 2600 5800 len=101 crc=22e77369
+feature polygon class=1 attr=- parts=1
+part 4 1000,1000 1400,1000 1400,1300 1000,1300
+feature polygon class=1 attr=- parts=1
+part 6 3000,3000 4000,3000 4000,3400 3400,3400 3400,4200 3000,4200
+feature polygon class=1 attr=- parts=2
+part 4 8000,8000 10000,8000 10000,10000 8000,10000
+part 4 8600,8600 8600,9400 9400,9400 9400,8600
+feature polygon class=1 attr=- parts=1
+part 4 15800,2000 16420,2000 16420,2600 15800,2600
+feature polygon class=2 attr=- parts=1
+part 4 12000,12000 12400,12000 12400,12400 12000,12400

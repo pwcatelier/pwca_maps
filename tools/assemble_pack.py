@@ -2,13 +2,17 @@
 side by side: water, roads, later places) and the card installer copies one directory and checks it against one
 MANIFEST.sha256.
 
-Usage: python tools/assemble_pack.py OUT_DIR PACK_DIR [PACK_DIR ...]
+Usage: python tools/assemble_pack.py [--replace] OUT_DIR PACK_DIR [PACK_DIR ...]
 
 Each PACK_DIR is a built pack (build_pack.py's output: its .pmt files, LICENSE.txt, ATTRIBUTION.txt, SOURCES.json and
 MANIFEST.sha256). Before anything is copied every PACK_DIR is checked against its own manifest. The .pmt files are
 copied (never changed: a file's sha256 in the new manifest is the one in its own pack's manifest), each copy is
 checked, LICENSE.txt and ATTRIBUTION.txt must be the same in every pack, and SOURCES.json lists every source and, per
 file, the pack it came from with its format, tool commit and build time. OUT_DIR must not exist or must be empty.
+
+Two packs holding a file of the same name are refused, unless --replace is given (THES-83: an add-on that rebuilds a
+layer, as the landmarks rebuild the symbols file): then the file of the LATER pack is the one taken, and the earlier
+pack's file of that name is left out (it is still checked against its pack's manifest).
 """
 
 import hashlib
@@ -78,7 +82,7 @@ def git_commit():
         return "unknown"
 
 
-def assemble(out, packs, log=print):
+def assemble(out, packs, log=print, replace=False):
     out = Path(out)
     packs = [Path(p) for p in packs]
     if not packs:
@@ -87,7 +91,7 @@ def assemble(out, packs, log=print):
         raise PackError(f"{out} exists and is not empty")
     checked = []  # (pack, manifest, SOURCES.json)
     names = {}
-    later = []  # the files of kinds a PMT 1.1 reader skips
+    later = {}  # the files of kinds a PMT 1.1 reader skips, by lower-case name
     for pack in packs:
         manifest = read_manifest(pack)
         info = json.loads((pack / "SOURCES.json").read_text(encoding="utf-8"))
@@ -96,13 +100,16 @@ def assemble(out, packs, log=print):
             raise PackError(f"{pack}: no .pmt file in its manifest")
         for n in pmts:
             if n.lower() in names:
-                raise PackError(f"{n} is in both {names[n.lower()]} and {pack}: two layers need two file names")
+                if not replace:
+                    raise PackError(f"{n} is in both {names[n.lower()]} and {pack}: two layers need two file names")
+                log(f"{n}: the one of {pack} replaces the one of {names[n.lower()]}")
             if n not in info.get("files", {}) or info["files"][n].get("sha256") != manifest[n]:
                 raise PackError(f"{pack}: SOURCES.json does not describe {n} as the manifest does")
             if (pack / n).stat().st_size > MAX_FILE:
                 raise PackError(f"{pack / n} is over 2 GiB")
+            later.pop(n.lower(), None)
             if layer_kind(pack / n) > LAST_1_1_KIND:
-                later.append(n)
+                later[n.lower()] = n
             names[n.lower()] = pack
         for t in TEXTS:
             if t not in manifest:
@@ -112,9 +119,12 @@ def assemble(out, packs, log=print):
         checked.append((pack, manifest, info, pmts))
         log(f"{pack}: manifest checked, {len(pmts)} layer file(s)")
     if len(later) > LATER_KIND_FILES_MAX:
-        raise PackError(f"{len(later)} files of layer kinds above {LAST_1_1_KIND} ({', '.join(later)}): a pack holds at "
+        raise PackError(f"{len(later)} files of layer kinds above {LAST_1_1_KIND} ({', '.join(later.values())}): a pack holds at "
                         f"most {LATER_KIND_FILES_MAX} (FORMAT.md 7.7: a display on PMT 1.1 firmware stops reading a pack "
                         f"after 8 files it skips)")
+    # A file is taken from the pack that supplies it last (the only one, without --replace).
+    for i, (pack, manifest, info, pmts) in enumerate(checked):
+        checked[i] = (pack, manifest, info, [n for n in pmts if names[n.lower()] == pack])
 
     out.mkdir(parents=True, exist_ok=True)
     sources, files = [], {}
@@ -150,11 +160,13 @@ def assemble(out, packs, log=print):
 
 
 def main(argv):
+    replace = "--replace" in argv[1:]
+    argv = [a for a in argv if a != "--replace"]
     if len(argv) < 3:
         print(__doc__, file=sys.stderr)
         return 2
     try:
-        assemble(argv[1], argv[2:])
+        assemble(argv[1], argv[2:], replace=replace)
     except PackError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

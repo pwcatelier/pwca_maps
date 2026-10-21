@@ -1,11 +1,14 @@
 """Builds the detail water layer (PMT, FORMAT.md section 7.2) from an OpenStreetMap extract.
 
 Usage: python tools/build_pack.py <extract.osm.pbf> <out_dir> [--name NAME] [--sea water-polygons-split-4326.zip]
-       [--processes N] [--region-zoom Z] [--max-file-bytes B] [--low-priority] [--layer water|roads|land] [--full]
+       [--processes N] [--region-zoom Z] [--max-file-bytes B] [--low-priority] [--layer water|roads|land|buildings]
+       [--full]
        [--minor]
 
 --layer roads builds the roads (FORMAT.md 7.4, 7.6), --layer land the land cover (FORMAT.md 7.7: housing, commerce
 and industry areas, parking, parks, woods, wetland, beaches) with the same passes and the same tile cutting.
+--layer buildings the buildings by the water (FORMAT-1.4-BUILDINGS.md, layer kind 9; THES-83): first the water a
+rider is on marks the zoom-14 tiles near it, then only the buildings that start in those tiles are read.
 
 What goes in (README.md "Sources"):
 - water areas: natural=water, waterway=riverbank, landuse=reservoir, as closed ways and multipolygon relations;
@@ -111,6 +114,17 @@ LAND_LEVELS = [
     (14, 15, 16, 14, 256, 2.0, 0.0, None),
 ]
 MIN_AREA_LAND_M2 = 100.0  # the land-cover pack keeps every area from 100 m2 (its levels choose by zoom)
+# Buildings (--layer buildings; layer_kind 9, PMT 1.4, FORMAT-1.4-BUILDINGS.md; THES-83): one level cut at zoom 14
+# serving 15 and 16 (Branding, pwca_logos ux/PANOPTES_MAP_NEW_LAYERS_STYLE.md section 2: buildings at 15 and 16
+# only). Only the buildings by the water (a rider's map; all of North America's would not fit a card): a building is
+# kept when the zoom-14 tile its first point is in, or one of the 8 around it (about 1 to 2.5 km), holds a point of a
+# water area of 1 ha or more, a river, a canal or a coastline.
+BUILDING_LEVELS = [(14, 15, 16, 14, 64, 1.0, 0.0, None)]
+MIN_AREA_BUILDING_M2 = 10.0  # smaller is a mapping slip, or under a pixel at zoom 16
+BUILDING = 1  # the one class
+SHORE_ZOOM = 14
+SHORE_MIN_AREA_M2 = 10_000.0  # a water area smaller than this (a garden pond) does not make its buildings water-side
+NODE_ID_BITS = 34  # the bit set of the water-side nodes holds ids below 2^34 (OpenStreetMap's are about 1.3e10)
 NAME_EVERY_M = 1500.0  # names.tsv: a named waterway's label points are this far apart
 MIN_AREA_FULL_M2 = 50.0  # a full water pack keeps every water area from 50 m2 (its levels choose by zoom)
 MIN_AREA_M2 = 10_000.0
@@ -321,6 +335,139 @@ def land_relation(tags):
     return tags.get("type") == "multipolygon" and land_class(tags) is not None
 
 
+# ---- buildings by the water (FORMAT-1.4-BUILDINGS.md) ---------------------------------------------------------------
+
+def shore_kind(tags):
+    """("a",) for a water area, ("l",) for a river, a canal or a coastline: the water a rider is on; else None."""
+    if area_class(tags) is not None:
+        return ("a",)
+    if line_class(tags) is not None or tags.get("natural") == "coastline":
+        return ("l",)
+    return None
+
+
+def building_kind(tags):
+    """(BUILDING, None) for a building's tags, or None (building=no is not one)."""
+    b = tags.get("building")
+    return None if b is None or b == "no" else (BUILDING, None)
+
+
+def tile_keys(lat_deg, lon_deg, zoom):
+    """Web Mercator tile keys (x << zoom | y) of points given in degrees (numpy arrays)."""
+    n = 1 << zoom
+    x = np.clip(((lon_deg + 180.0) / 360.0 * n).astype(np.int64), 0, n - 1)
+    s = np.sin(np.radians(np.clip(lat_deg, -85.0511, 85.0511)))
+    y = np.clip(((0.5 - np.log((1 + s) / (1 - s)) / (4 * np.pi)) * n).astype(np.int64), 0, n - 1)
+    return (x << zoom) | y
+
+
+def near_tiles(keys, zoom):
+    """The tiles and the 8 around each (sorted, unique)."""
+    n, mask = 1 << zoom, (1 << zoom) - 1
+    keys = np.asarray(keys, np.int64)
+    x, y = keys >> zoom, keys & mask
+    out = []
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            xs, ys = x + dx, y + dy
+            ok = (xs >= 0) & (xs < n) & (ys >= 0) & (ys < n)
+            out.append((xs[ok] << zoom) | ys[ok])
+    return np.unique(np.concatenate(out))
+
+
+def _near_nodes_in(block, tiles_path):
+    """Worker: the ids of a block's dense nodes that lie in the sorted zoom-14 tiles of tiles_path."""
+    _strings, groups, gran, lat_off, lon_off = block
+    near = np.load(tiles_path, mmap_mode="r")
+    out = []
+    for g in groups:
+        for fn, dense in osmpbf.fields(g):
+            if fn != 2:
+                continue
+            ids = la = lo = None
+            for f2, v in osmpbf.fields(dense):
+                if f2 == 1:
+                    ids = np.cumsum(osmpbf.zigzag(osmpbf.varints(v)))
+                elif f2 == 8:
+                    la = np.cumsum(osmpbf.zigzag(osmpbf.varints(v)))
+                elif f2 == 9:
+                    lo = np.cumsum(osmpbf.zigzag(osmpbf.varints(v)))
+            if ids is None or not near.size:
+                continue
+            keys = tile_keys(1e-9 * (lat_off + gran * la), 1e-9 * (lon_off + gran * lo), SHORE_ZOOM)
+            pos = np.searchsorted(near, keys)
+            pos[pos >= near.size] = 0
+            hit = near[pos] == keys
+            if hit.any():
+                out.append(ids[hit].astype(np.int64))
+    return out
+
+
+def _buildings_in(block, bits_path):
+    """Worker: a block's buildings whose first point is a water-side node (the bit set of bits_path)."""
+    bits = np.load(bits_path, mmap_mode="r")
+    out = []
+    for wid, kind, refs in osmpbf._ways_in(block, building_kind, None):
+        r0 = int(refs[0])
+        if 0 <= r0 < (1 << NODE_ID_BITS) and (int(bits[r0 >> 3]) >> (r0 & 7)) & 1:
+            out.append((wid, kind, refs))
+    return out
+
+
+def mark_nodes(bits, ids):
+    """Sets the bits of node ids (below 2^NODE_ID_BITS) in a uint8 bit set; returns how many were set."""
+    ids = np.asarray(ids, np.int64)
+    ids = ids[(ids >= 0) & (ids < (1 << NODE_ID_BITS))]
+    np.bitwise_or.at(bits, ids >> 3, np.left_shift(np.uint8(1), (ids & 7).astype(np.uint8)))
+    return int(ids.size)
+
+
+def water_side_nodes(path, work, processes, log, t0):
+    """Marks the nodes by the water (FORMAT-1.4-BUILDINGS.md 2): the zoom-14 tiles that hold a point of the water a
+    rider is on, and the 8 around each; then every node in them, as a bit set saved to work/near_nodes.npy (its path is
+    returned; 2 GiB on disk, read memory-mapped by the workers)."""
+    rels = osmpbf.relations_parallel(path, water_relation, processes)
+    member_ids = np.unique(np.array([m for _, _, ms in rels for typ, m, _ in ms if typ == 1], np.int64))
+    del rels
+    ws = osmpbf.ways_parallel(path, shore_kind, member_ids, processes)
+    needed = np.unique(np.concatenate([r for _, _, r in ws])) if ws else np.zeros(0, np.int64)
+    lat, lon, _ = osmpbf.nodes_e7_parallel(path, needed, processes)
+    missing = np.iinfo(np.int32).min
+    keys, n_small = [], 0
+    for _wid, kind, refs in ws:
+        idx = np.searchsorted(needed, refs)
+        la, lo = lat[idx], lon[idx]
+        ok = la != missing
+        la, lo = la[ok] * 1e-7, lo[ok] * 1e-7
+        if not la.size:
+            continue
+        if kind == ("a",):  # a closed water area of its own: only one of 1 ha or more
+            if len(refs) < 4 or refs[0] != refs[-1] or la.size < 3 or area_m2(la, lo) < SHORE_MIN_AREA_M2:
+                n_small += 1
+                continue
+        keys.append(np.unique(tile_keys(la, lo, SHORE_ZOOM)))
+    n_ways = len(ws)
+    del ws, needed, lat, lon
+    shore = np.unique(np.concatenate(keys)) if keys else np.zeros(0, np.int64)
+    near = near_tiles(shore, SHORE_ZOOM)
+    log(f"water side: {n_ways} water ways ({n_small} small areas left out), {shore.size} zoom-{SHORE_ZOOM} tiles with "
+        f"water, {near.size} with the tiles around them ({time.time() - t0:.0f} s)")
+    work = Path(work)
+    work.mkdir(parents=True, exist_ok=True)
+    tiles_path = work / "near_tiles.npy"
+    np.save(tiles_path, near)
+    bits = np.zeros(1 << (NODE_ID_BITS - 3), np.uint8)
+    n_nodes = 0
+    for part in osmpbf.imap_blocks(path, _near_nodes_in, (str(tiles_path),), processes):
+        for ids in part:
+            n_nodes += mark_nodes(bits, ids)
+    bits_path = work / "near_nodes.npy"
+    np.save(bits_path, bits)
+    del bits
+    log(f"water side: {n_nodes} nodes in those tiles ({time.time() - t0:.0f} s)")
+    return str(bits_path)
+
+
 def label_point(outer, inners=()):
     """A point inside an area for its label: the middle of the widest stretch of the area along the horizontal line
     through the middle of its largest outer ring. outer: [(lat, lon)] arrays in degrees; returns (lat, lon)."""
@@ -350,7 +497,7 @@ def line_length_m(la, lo):
 
 def rank_of(layer):
     return {"water-full": LINE_RANK_WATER, "lines-full": LINE_RANK, "minor-full": LINE_RANK,
-            "land-full": LINE_RANK}.get(layer)  # land cover has no lines: the rank only says "a full pack"
+            "land-full": LINE_RANK, "buildings-full": LINE_RANK}.get(layer)  # no lines: the rank says "a full pack"
 
 
 def is_full(layer):
@@ -365,13 +512,24 @@ def is_land(layer):
     return layer == "land-full"
 
 
+def is_buildings(layer):
+    return layer == "buildings-full"
+
+
+def areas_only(layer):
+    """A layer of areas with no sea and no lines (land cover, buildings): an absent tile draws nothing."""
+    return is_land(layer) or is_buildings(layer)
+
+
 def kind_of(layer):
-    return pmt.KIND_LAND if is_land(layer) else pmt.KIND_ROADS if is_lines(layer) else pmt.KIND_WATER
+    return pmt.KIND_LAND if is_land(layer) else pmt.KIND_BUILDINGS if is_buildings(layer) \
+        else pmt.KIND_ROADS if is_lines(layer) else pmt.KIND_WATER
 
 
 def levels_of(layer):
     return {"roads": ROAD_LEVELS, "water-full": LEVELS_FULL, "lines-full": LINE_LEVELS_FULL,
-            "minor-full": MINOR_LEVELS, "land-full": LAND_LEVELS}.get(layer, LEVELS)
+            "minor-full": MINOR_LEVELS, "land-full": LAND_LEVELS, "buildings-full": BUILDING_LEVELS}.get(layer,
+                                                                                                       LEVELS)
 
 
 # ---- rings from relations -------------------------------------------------------------------------------------------
@@ -540,6 +698,15 @@ def collect_store(path, store_dir, log, processes, sea=None, layer="water", prog
             f"({time.time() - t0:.0f} s)")
         passing("ways")
         ws = osmpbf.ways_parallel(path, land_kind, member_ids, processes)
+    elif is_buildings(layer):
+        sea = None
+        rels, member_ids = [], np.zeros(0, np.int64)
+        near_dir = Path(store_dir).parent / "near.tmp"
+        bits_path = water_side_nodes(path, near_dir, processes, log, t0)
+        passing("ways")
+        ws = osmpbf.map_blocks(path, _buildings_in, (bits_path,), processes)
+        shutil.rmtree(near_dir, ignore_errors=True)
+        log(f"buildings by the water: {len(ws)} ({time.time() - t0:.0f} s)")
     elif full:
         rels = osmpbf.relations_parallel(path, water_relation_full, processes)
         member_ids = np.unique(np.array([m for _, _, ms in rels for typ, m, _ in ms if typ == 1], np.int64))
@@ -588,7 +755,8 @@ def collect_store(path, store_dir, log, processes, sea=None, layer="water", prog
             stats["sea"] += 1
         log(f"sea: {stats['sea']} water polygons from {Path(sea).name} ({time.time() - t0:.0f} s)")
     deg = featurestore.degrees
-    min_area = MIN_AREA_LAND_M2 if is_land(layer) else MIN_AREA_FULL_M2 if full else MIN_AREA_M2
+    min_area = MIN_AREA_LAND_M2 if is_land(layer) else MIN_AREA_BUILDING_M2 if is_buildings(layer) \
+        else MIN_AREA_FULL_M2 if full else MIN_AREA_M2
     classify = land_class if is_land(layer) else area_class
     if is_lines(layer):
         # Each class's ways joined end to end where two of them meet, then stored as lines (join_lines). The full
@@ -688,7 +856,8 @@ def collect_store(path, store_dir, log, processes, sea=None, layer="water", prog
     lines.close()
     if names:
         names.close()
-    what = "land-cover areas" if is_land(layer) else "water areas (with the sea pieces)"
+    what = "land-cover areas" if is_land(layer) else "buildings" if is_buildings(layer) \
+        else "water areas (with the sea pieces)"
     log(f"features: {n_poly} {what}, {n_line} river/canal lines; dropped {stats['small']} "
         f"under {min_area:.0f} m2, {stats['unclosed']} unclosed ways, {stats['orphan_holes']} holes outside their outers; "
         f"{n_points} points in the store ({time.time() - t0:.0f} s)")
@@ -903,7 +1072,7 @@ def region_job(job):
         if tz < 8:  # cut once from the whole store (low_level_tiles)
             out.append(({}, {}))
             continue
-        land = is_land(layer)
+        land = areas_only(layer)
         sea_cls = None if land else 1
         grid, tiles = apply_coverage(level_tiles(polys, lines, level, region, land), cells, tz, bits, buf, sea_cls)
         enc = {}
@@ -954,9 +1123,10 @@ def main(argv):
     ap.add_argument("--keep-store", action="store_true", help="keep the feature store (<out_dir>/store)")
     ap.add_argument("--reuse-store", action="store_true",
                     help="skip the passes over the extract: cut from a complete store kept by an earlier run")
-    ap.add_argument("--layer", choices=("water", "roads", "land"), default="water",
-                    help="water (layer_kind 2, written as PMT 1.0), roads (layer_kind 4, written as PMT 1.1), or land "
-                         "(land cover: layer_kind 6, written as PMT 1.2, FORMAT.md 7.7)")
+    ap.add_argument("--layer", choices=("water", "roads", "land", "buildings"), default="water",
+                    help="water (layer_kind 2, written as PMT 1.0), roads (layer_kind 4, written as PMT 1.1), land "
+                         "(land cover: layer_kind 6, written as PMT 1.2, FORMAT.md 7.7), or buildings (by the water: "
+                         "layer_kind 9, written as PMT 1.4, FORMAT-1.4-BUILDINGS.md)")
     ap.add_argument("--minor", action="store_true",
                     help="with --layer roads: the minor ways' file (service roads, tracks, paths), zoom 15 and up")
     ap.add_argument("--full", action="store_true",
@@ -970,11 +1140,12 @@ def main(argv):
     if a.high_priority:
         os.environ["PWCA_MAPS_PRIORITY"] = "high"  # the worker processes read it as they start
         osmpbf.apply_priority()
-    layer = {"water": "water-full", "roads": "lines-full"}[a.layer] if a.full and a.layer != "land" else a.layer
-    if a.layer == "land":
+    layer = {"water": "water-full", "roads": "lines-full"}[a.layer] if a.full and a.layer in ("water", "roads") \
+        else a.layer
+    if a.layer in ("land", "buildings"):
         if a.sea:
             ap.error("--sea goes with the water layer")
-        layer = "land-full"  # the land-cover pack has one form
+        layer = a.layer + "-full"  # the land-cover and building packs have one form each
     if a.minor:
         if a.layer != "roads" or a.full:
             ap.error("--minor goes with --layer roads, without --full")
@@ -1025,8 +1196,9 @@ def main(argv):
     date = time.strftime("%Y-%m-%d", time.gmtime(stamp))
     commit = git_commit()
     roads = is_lines(layer)
-    land = is_land(layer)
-    strings = ["osm-land" if land else "osm-roads" if roads else "osm-water", CREDIT, "ODbL 1.0", "OpenStreetMap", date,
+    land = areas_only(layer)
+    strings = ["osm-buildings" if is_buildings(layer) else "osm-land" if land else "osm-roads" if roads
+               else "osm-water", CREDIT, "ODbL 1.0", "OpenStreetMap", date,
                f"pwca_maps {commit}"]
     files = []  # (path, bytes, sha256, tiles per level)
     lv_table = levels_of(layer)
@@ -1098,7 +1270,8 @@ def main(argv):
         sources.append({"name": "OpenStreetMap water polygons (osmdata.openstreetmap.de)", "license": "ODbL 1.0",
                         "file": Path(a.sea).name, "sha256": sha256(a.sea)})
     info = {
-        "format": "PMT 1.2 (FORMAT.md 7.7): land cover, layer_kind 6" if land
+        "format": "PMT 1.4 (FORMAT-1.4-BUILDINGS.md): buildings by the water, layer_kind 9" if is_buildings(layer)
+        else "PMT 1.2 (FORMAT.md 7.7): land cover, layer_kind 6" if land
         else "PMT 1.1 (FORMAT.md): roads, layer_kind 4" if roads else "PMT 1.0 (FORMAT.md)",
         "tool": {"repository": "https://github.com/PWC-Atelier-Artisanal-Watercraft/pwca_maps", "commit": commit},
         "built_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

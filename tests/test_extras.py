@@ -48,7 +48,7 @@ class Landmarks(unittest.TestCase):
 
     def test_levels(self):
         z10 = bx.SYMBOL_LEVELS[0][4]
-        self.assertTrue({bx.LIGHTHOUSE, bx.DAM} <= z10 and not {bx.LOCK, bx.SWIM_BEACH} & z10)
+        self.assertTrue(bx.LIGHTHOUSE in z10 and not {bx.DAM, bx.LOCK, bx.SWIM_BEACH} & z10)
         for lv in bx.SYMBOL_LEVELS[1:]:
             self.assertTrue(bx.LANDMARKS <= lv[4])
 

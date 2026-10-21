@@ -138,5 +138,63 @@ class Land(unittest.TestCase):
             self.assertEqual(kept, {c for c, z in first_zoom.items() if z <= lv[2]}, lv)
 
 
+class Buildings(unittest.TestCase):
+    """The buildings by the water (FORMAT-1.4-BUILDINGS.md, THES-83)."""
+
+    def test_kinds(self):
+        self.assertEqual(build_pack.building_kind({"building": "yes"}), (1, None))
+        self.assertEqual(build_pack.building_kind({"building": "boathouse"}), (1, None))
+        self.assertIsNone(build_pack.building_kind({"building": "no"}))
+        self.assertIsNone(build_pack.building_kind({"landuse": "residential"}))
+        s = build_pack.shore_kind
+        self.assertEqual(s({"natural": "water"}), ("a",))
+        self.assertEqual(s({"waterway": "riverbank"}), ("a",))
+        self.assertEqual(s({"waterway": "river"}), ("l",))
+        self.assertEqual(s({"natural": "coastline"}), ("l",))
+        for tags in ({"waterway": "stream"}, {"waterway": "ditch"}, {"natural": "water", "intermittent": "yes"},
+                     {"building": "yes"}, {}):
+            self.assertIsNone(s(tags), tags)  # a stream is not water a rider is on
+
+    def test_tiles_near_the_water(self):
+        z = build_pack.SHORE_ZOOM
+        k = build_pack.tile_keys(np.array([45.0]), np.array([-93.0]), z)
+        x, y = int(k[0]) >> z, int(k[0]) & ((1 << z) - 1)
+        self.assertEqual((x, y), (int((180 - 93) / 360 * (1 << z)), y))
+        near = build_pack.near_tiles(k, z)
+        self.assertEqual(near.size, 9)
+        self.assertIn((x + 1) << z | (y - 1), near.tolist())
+        self.assertNotIn((x + 2) << z | y, near.tolist())
+        corner = build_pack.near_tiles(np.array([0], np.int64), z)  # the world's corner: 4 tiles, none outside
+        self.assertEqual(sorted(corner.tolist()), [0, 1, 1 << z, (1 << z) | 1])
+
+    def test_the_node_bit_set(self):
+        bits = np.zeros(64, np.uint8)
+        old = build_pack.NODE_ID_BITS
+        build_pack.NODE_ID_BITS = 9  # 512 ids in 64 bytes
+        try:
+            n = build_pack.mark_nodes(bits, [0, 7, 8, 511, 512, -1, 7])
+        finally:
+            build_pack.NODE_ID_BITS = old
+        self.assertEqual(n, 5)  # 512 and -1 are outside the set; 7 twice is one bit
+        self.assertEqual(bits[0], 0b10000001)
+        self.assertEqual(bits[1], 1)
+        self.assertEqual(bits[63], 0x80)
+        self.assertEqual(int(bits.sum()), 0b10000001 + 1 + 0x80)
+
+    def test_one_level_of_polygons(self):
+        self.assertEqual(build_pack.levels_of("buildings-full"), build_pack.BUILDING_LEVELS)
+        self.assertEqual(build_pack.kind_of("buildings-full"), pmt.KIND_BUILDINGS)
+        self.assertTrue(build_pack.areas_only("buildings-full") and not build_pack.is_land("buildings-full"))
+        level = build_pack.BUILDING_LEVELS[0]
+        self.assertEqual(level[:3], (14, 15, 16))
+        house = (1, square(45.0, -93.0, 12))
+        tiles = build_pack.level_tiles([house], [], level, None, land=True)
+        self.assertEqual(len(tiles), 1)
+        for feats in tiles.values():
+            blob = pmt.encode_tile(feats, level[3], level[4], pmt.KIND_BUILDINGS)
+            self.assertEqual([f[0] for f in pmt.decode_tile(blob, level[3], level[4], 0, pmt.KIND_BUILDINGS)],
+                             [pmt.POLYGON])
+
+
 if __name__ == "__main__":
     unittest.main()
