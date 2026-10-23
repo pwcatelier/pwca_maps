@@ -140,7 +140,7 @@ LICENSE_TEXT = ("This map data is made available under the Open Database License
                 "https://opendatacommons.org/licenses/odbl/1-0/. Contents © OpenStreetMap contributors.\n")
 ATTRIBUTION_TEXT = ("Map data © OpenStreetMap contributors, available under the Open Database License (ODbL): "
                     "openstreetmap.org/copyright. Built with the recipe published at "
-                    "https://github.com/PWC-Atelier-Artisanal-Watercraft/pwca_maps. Not for navigation.\n")
+                    "https://github.com/theseusinstruments/pwca_maps. Not for navigation.\n")
 
 
 # ---- classification (FORMAT.md 7.2) -------------------------------------------------------------------------------
@@ -1314,7 +1314,7 @@ def main(argv):
         "format": "PMT 1.4 (FORMAT-1.4-BUILDINGS.md): buildings by the water, layer_kind 9" if is_buildings(layer)
         else "PMT 1.2 (FORMAT.md 7.7): land cover, layer_kind 6" if land
         else "PMT 1.1 (FORMAT.md): roads, layer_kind 4" if roads else "PMT 1.0 (FORMAT.md)",
-        "tool": {"repository": "https://github.com/PWC-Atelier-Artisanal-Watercraft/pwca_maps", "commit": commit},
+        "tool": {"repository": "https://github.com/theseusinstruments/pwca_maps", "commit": commit},
         "built_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "sources": sources,
         "files": {dst.name: {"bytes": n, "sha256": h, "tiles_per_level": t} for (_, n, h, t), dst in zip(files, final)},

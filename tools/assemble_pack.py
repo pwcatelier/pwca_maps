@@ -146,7 +146,7 @@ def assemble(out, packs, log=print, replace=False):
     doc = {
         "format": "PMT (FORMAT.md): a pack of layers, each file as its own entry says",
         "assembled_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "assembled_with": {"repository": "https://github.com/PWC-Atelier-Artisanal-Watercraft/pwca_maps",
+        "assembled_with": {"repository": "https://github.com/theseusinstruments/pwca_maps",
                            "commit": git_commit(), "tool": "tools/assemble_pack.py"},
         "sources": sources,
         "files": files,
